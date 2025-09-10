@@ -6040,3 +6040,854 @@ function AutoCards(inHook, inText, inStop) {
 } AutoCards(null); function isolateLSIv2(code, log, text, stop) { const console = Object.freeze({ log }); try { eval(code); return [null, text, stop]; } catch (error) { return [error, text, stop]; } }
 
 // Your other library scripts go here
+function ParagraphFix(hook, inputText) {
+    "use strict";
+
+    // Default settings
+    const DEFAULT_FORMATTING_TYPE = "none"; // "none", "basic", "empty-line", "newline"
+    const DEFAULT_INDENT_PARAGRAPHS = false;
+
+    // Initialize or retrieve state
+    const PF = (function () {
+        if (state.ParagraphFix) {
+            const pf = state.ParagraphFix;
+            delete state.ParagraphFix;
+            return pf;
+        }
+        return {
+            formattingType: DEFAULT_FORMATTING_TYPE,
+            indentParagraphs: DEFAULT_INDENT_PARAGRAPHS
+        };
+    })();
+
+    // Helper functions
+    function readPastAction(lookBack = 0) {
+        if (!Array.isArray(history) || history.length === 0) {
+            return { text: "", type: "unknown" };
+        }
+        const index = Math.max(0, history.length - 1 - Math.abs(lookBack));
+        const action = history[index] || {};
+        return {
+            text: action.text || action.rawText || "",
+            type: action.type || "unknown"
+        };
+    }
+
+    function adjustNewlines(text) {
+        if (PF.formattingType === "none") {
+            return text;
+        }
+
+        const previousAction = readPastAction(0);
+
+        // Look at history[history.length - 1].type, if equal to "do", "say", or "see", then don't proceed
+        if (["do", "say", "see"].includes(previousAction.type)) {
+            return text;
+        }
+
+        // Count newlines at end of previous action's text (0, 1, or 2 max)
+        const prevText = previousAction.text || "";
+        const endNewlines = Math.min(2, (prevText.match(/\n*$/)?.[0] || "").length);
+
+        // Count newlines at start of current text (0, 1, or 2 max)
+        const startNewlines = Math.min(2, (text.match(/^\n*/)?.[0] || "").length);
+
+        // Sum the two newline counts together
+        const totalNewlines = endNewlines + startNewlines;
+
+        // If the sum is less than 2, then proceed
+        if (totalNewlines < 2) {
+            if (totalNewlines === 0) {
+                // If sum is 0, add nothing
+                return text;
+            } else if (totalNewlines === 1) {
+                // If sum is 1, add "\n" and break
+                return "\n" + text;
+            }
+        }
+
+        return text;
+    }
+
+    function getConfigCardTemplate() {
+        return {
+            type: "class",
+            title: "Configure Paragraph Fix",
+            keys: "Edit the entry above to configure the Paragraph Fix",
+            entry: "> The Paragraph Fix ensures consistent spacing in your adventure. You may configure the following settings by replacing the current values with your desired options.\n" +
+                "> Formatting Type: " + PF.formattingType + "\n" +
+                "> Indent Paragraphs: " + PF.indentParagraphs + "\n\n" +
+                "> Available formatting types:\n" +
+                "> - none: No formatting applied\n" +
+                "> - basic: Basic formatting (converts multiple spaces/newlines to double newlines)\n" +
+                "> - empty-line: Empty line dialogue formatting (adds spacing before quotes except after commas)\n" +
+                "> - newline: Newline dialogue formatting (basic + newlines before quotes)\n\n" +
+                "> Indent Paragraphs adds 4-space indents to new paragraphs",
+            description: "The Paragraph Fix automatically applies consistent spacing and dialogue formatting to your story output. Set formatting type to 'none' to disable all formatting, and set indent paragraphs to 'true' or 'false' to control paragraph indentation."
+        };
+    }
+
+    function extractSettings(text) {
+        const settings = {};
+        const lines = text.toLowerCase().replace(/[^a-z0-9:\->]+/g, "").split(">");
+
+        for (const line of lines) {
+            const parts = line.split(":");
+            if (parts.length !== 2) continue;
+
+            const key = parts[0].trim();
+            const value = parts[1].trim();
+
+            if (key.includes("formatting") && key.includes("type")) {
+                const validTypes = ["none", "basic", "empty-line", "emptyline", "newline"];
+                if (validTypes.includes(value)) {
+                    settings.formattingType = value.replace("emptyline", "empty-line");
+                }
+            }
+
+            if (key.includes("indent") && key.includes("paragraphs")) {
+                const trueValues = ["true", "t", "yes", "y", "on"];
+                const falseValues = ["false", "f", "no", "n", "off"];
+                if (trueValues.includes(value)) {
+                    settings.indentParagraphs = true;
+                } else if (falseValues.includes(value)) {
+                    settings.indentParagraphs = false;
+                }
+            }
+        }
+
+        return settings;
+    }
+
+    function findConfigCard() {
+        const template = getConfigCardTemplate();
+        for (const card of storyCards) {
+            // Check for exact title match
+            if (card.title === template.title) {
+                return card;
+            }
+            // Check for exact keys match
+            if (card.keys === template.keys) {
+                return card;
+            }
+            // Check for partial matches in keys (like original code)
+            if (card.keys && card.keys.includes("Configure Paragraph Fix")) {
+                return card;
+            }
+            // Check for partial matches in title
+            if (card.title && card.title.includes("Configure Paragraph Fix")) {
+                return card;
+            }
+        }
+        return null;
+    }
+
+    function createOrRepairCard() {
+        let configCard = findConfigCard();
+        const template = getConfigCardTemplate();
+
+        if (!configCard) {
+            // Create new card
+            addStoryCard(template.keys);
+
+            // Find and configure the newly created card
+            for (let i = storyCards.length - 1; i >= 0; i--) {
+                const card = storyCards[i];
+                if (card.keys === template.keys) {
+                    card.type = template.type;
+                    card.title = template.title;
+                    card.entry = template.entry;
+                    card.description = template.description;
+                    return card;
+                }
+            }
+        } else {
+            // Repair existing card if needed
+            let needsRepair = false;
+
+            // If title matches but keys don't, repair the keys
+            if (configCard.title === template.title && configCard.keys !== template.keys) {
+                configCard.keys = template.keys;
+                needsRepair = true;
+            }
+
+            // If keys match but title doesn't, repair the title
+            if (configCard.keys === template.keys && configCard.title !== template.title) {
+                configCard.title = template.title;
+                needsRepair = true;
+            }
+
+            // If partial matches, repair both title and keys
+            if (configCard.title !== template.title && configCard.keys !== template.keys) {
+                configCard.title = template.title;
+                configCard.keys = template.keys;
+                needsRepair = true;
+            }
+
+            // Always update the template parts but preserve user's settings
+            const userSettings = extractSettings(configCard.entry);
+            if (userSettings.formattingType) {
+                PF.formattingType = userSettings.formattingType;
+            }
+            if (typeof userSettings.indentParagraphs === "boolean") {
+                PF.indentParagraphs = userSettings.indentParagraphs;
+            }
+
+            // Update with current settings
+            const updatedTemplate = getConfigCardTemplate();
+            configCard.entry = updatedTemplate.entry;
+            configCard.description = updatedTemplate.description;
+
+            return configCard;
+        }
+
+        return null;
+    }
+
+    function applyFormatting(text, type) {
+        switch (type) {
+            case "basic":
+                // Without dialogue formatting
+                return text.replace(/\s{2,}|\n/g, '\n\n');
+
+            case "empty-line":
+                // With empty line dialogue formatting
+                return text.replace(/(?<!,) (?=")|\s{2,}|\n/g, '\n\n');
+
+            case "newline":
+                // With newline dialogue formatting
+                return text.replace(/\s{2,}|\n/g, '\n\n').replace(/(?<!,) (?=")/g, '\n');
+
+            default:
+                return text;
+        }
+    }
+
+    function applyIndentation(text) {
+        if (!PF.indentParagraphs) {
+            return text;
+        }
+
+        const previousAction = readPastAction(0);
+        const isAfterDoSay = ["do", "say", "see"].includes(previousAction.type);
+
+        if (isAfterDoSay) {
+            // Only indent if the text doesn't start with ">" (commands/dialogue)
+            const lines = text.split('\n');
+            return lines.map(line => {
+                const trimmed = line.trimStart();
+                if (trimmed.startsWith(">") || trimmed === "" || line.startsWith("    ")) {
+                    return line;
+                }
+                return "    " + line;
+            }).join('\n');
+        } else {
+            // Add indentation after paragraph breaks, but not to dialogue/commands
+            return text.replace(/\n\n(\s*)(?=\S)(?!>)/g, (match, spaces) => {
+                return '\n\n    ';
+            });
+        }
+    }
+
+    // Main logic based on hook
+    switch (hook) {
+        case "context":
+            // Remove indentation from context so AI doesn't see it
+            let contextResult = inputText.replace(/^    /gm, "");
+
+            // Ensure config card exists and is properly configured
+            createOrRepairCard();
+
+            state.ParagraphFix = PF;
+            return contextResult;
+
+        case "output":
+            // If formatting is "none", return unchanged
+            if (!PF.formattingType || PF.formattingType === "none") {
+                state.ParagraphFix = PF;
+                return inputText;
+            }
+
+            // Start with the input text
+            let result = inputText;
+
+            // Apply formatting based on type
+            result = applyFormatting(result, PF.formattingType);
+
+            // Apply newline adjustment improvement
+            result = adjustNewlines(result);
+
+            // Apply indentation if enabled
+            result = applyIndentation(result);
+
+            state.ParagraphFix = PF;
+            return result;
+
+        default:
+            state.ParagraphFix = PF;
+            return inputText;
+    }
+}
+
+
+/**
+ * Escapes special regex characters in a string.
+ * @param {string} str
+ * @returns {string}
+ */
+function escapeRegex(str) {
+    return str.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+}
+
+/**
+ * Escapes special regex characters in a string.
+ * @param {string} str
+ * @returns {string}
+ */
+function escapeRegex(str) {
+    return str.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+}
+
+/**
+ * Removes substrings from the AI output that have been defined as cliché.
+ * 
+ * @param {string} text - The AI-generated text to filter.
+ * @return {string} - The filtered AI output.
+ */
+function delete_cliches(text) {
+    // Phrases removed including the entire sentence.
+    const aggressive_delete = [
+        "You're really something else sometimes, you know that?",
+        "casting long shadows",
+        "Well, well, well",
+        "knuckles go white",
+        "taps her nails",
+        "tapping her nails",
+        "her fingers idly tapping",
+        "Her fingers tap",
+        "fingers drum",
+        "fingers drumming idly",
+        "Her fingers drum idly against the desk",
+        "Her fingers tap idly against the desk",
+        "tapping two fingers",
+        "Well, well, well,",
+        "Well, well, well.",
+        "Well, well,",
+        "Well, well",
+        "the cool air in the room making her skin prickle with goosebumps.",
+        "You're something else",
+        "You're full of surprises, aren't you?",
+        "Knuckles white",
+        "manicured nails",
+        "knuckles whiten",
+        "knuckles have turned stark white",
+        "knuckles are bone-white",
+        "knuckles are a stark white",
+        "knuckles turn a stark white",
+        "knuckles have turned a ghostly white",
+        "knuckles are stark white",
+        "knuckles turn stark white",
+        "knuckles turn white",
+        "Knuckles turning white",
+        "knuckles turn a ghostly white",
+        "little mortal",
+        "glinting with mischief",
+        "like a predator circling its prey",
+        "casting long, angular shadows",
+        "The morning sun cast long shadows",
+        "The morning sun cast a warm glow",
+        "practiced ease",
+        "jaw clenching",
+        "dim light",
+        "speaking softly",
+        "Intense",
+        "A chill runs down your spine",
+        "with messy dark hair",
+        "casts a golden hue",
+        "casts a warm glow",
+        "casts long shadows",
+        "ice queen",
+        "look what the cat dragged in",
+        "cat dragged in",
+        "messy brown hair",
+        "Piece of work",
+        "cacophony",
+        "predatory",
+        "cocoon",
+        "folded note",
+        "crumpled piece of paper",
+        "cast long shadows",
+        "panties in a twist",
+        "You've got some balls on you",
+        "You got some serious balls, you know that?",
+        "The morning sunlight filters through the windows, casting long shadows across the floor.",
+        "the air is thick",
+        "words hang heavy in the air",
+        "The atmosphere is thick with",
+        "you can't help",
+        "Well, aren't you just full of surprises",
+        "your heart beats",
+        "your mind wanders",
+        "voice crackles with",
+        "dimly lit",
+        "sweetheart",
+        "fuck me sideways",
+        "princess",
+        "a stark contrast",
+        "a twisted sense of",
+        "breath hot on your face",
+        "breath hot on your face",
+        "hangs in the air",
+        "feel a chill run down your spine",
+        "shiver down your spine",
+        "shiver up your spine",
+        "your voice a mix of",
+        "a wave of",
+        "voice just above a whisper",
+        "eyes gleaming with",
+        "a mixture of surprise and curiosity",
+        "pride and accomplishment",
+        "jolt of electricity",
+        "glowing with an otherworldly light",
+        "smile playing at the corners of his lips",
+        "smile playing at the corners of her lips",
+        "face contorts with anger",
+        "eyes glistening with unshed tears",
+        "unshed tears",
+        "intricately carved wooden box",
+        "the tension in the room is palpable",
+        "hips swaying enticingly",
+        "takes a step closer",
+        "brushes a stray hair from your face",
+        "glowing with an otherworldly light",
+        "smile playing at the corners of his lips",
+        "smile playing at the corners of her lips",
+        "face contorts with anger",
+        "face set in a grim mask",
+        "mouth set in a grim line",
+        "hand resting on the hilt of his sword",
+        "hand instinctively goes to the hilt of his sword",
+        "hand resting on the hilt of her sword",
+        "hand instinctively goes to the hilt of her sword",
+        "the hum of machinery",
+        "merely a pawn in a much larger game",
+        "this changes everything",
+        "could Have fooled me",
+        "but tinged with"
+    ];
+
+    // Phrases to be cut out but with the surrounding sentence preserved.
+    const precise_delete = [
+        "looming ominously",
+        "hfjddfh"
+    ];
+
+    // Simple phrase replacements.
+    const replace = [
+        ["verdant", "green"],
+        ["curtly", "shortly"],
+        ["leverage", "use"],
+        ["robust", "strong"],
+        ["unprecedented", "new"],
+        ["myriad", "many"],
+        ["commence", "start"],
+        ["ascertain", "find out"],
+        ["endeavor", "try"],
+        ["utilize", "use"],
+        ["facilitate", "help"],
+        ["plethora", "a lot"],
+        ["elucidate", "explain"],
+        ["exemplify", "show"],
+        ["paradigm", "model"],
+        ["synergy", "teamwork"],
+        ["traverse", "cross"],
+        ["illuminate", "explain"],
+        ["manifest", "show"],
+        ["intricate", "complex"],
+        ["subsequent", "next"],
+        ["procure", "get"],
+        ["amidst", "among"],
+        ["visage", "face"],
+        ["peruse", "read"],
+        ["cascade", "flow"],
+        ["linger", "stay"],
+        ["fervor", "excitement"],
+        ["tranquil", "calm"],
+        ["emanate", "come from"],
+        ["beckon", "call"],
+        ["venture", "go"],
+        ["gaze", "look"],
+        ["inquire", "ask"],
+        ["exclaim", "shout"],
+        ["murmur", "whisper"]
+    ];
+
+    // Simple name replacements.
+    const name_replace = [
+        ["Li1ly", "Lorelei"],
+        ["Lisf42a", "Larisa"],
+        ["Sa1lawt", "Solène"],
+        ["J32ake", "Jasper"],
+        ["A14lx", "Abel"]
+    ];
+
+    // Instead of manually iterating with exec(), we use match() to get all sentences.
+    // This regex matches either a sentence ending with punctuation, or the final sentence.
+    const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
+    const okay_sentences = [];
+
+    // Process each sentence: if a sentence contains any aggressive delete phrase, discard it
+    // (or preserve its quotes if present). Otherwise, keep the sentence.
+    for (const sentence of sentences) {
+        let shouldDelete = false;
+        for (const illegal_phrase of aggressive_delete) {
+            if (sentence.toLowerCase().includes(illegal_phrase.toLowerCase())) {
+                shouldDelete = true;
+                break;
+            }
+        }
+        // If the sentence is flagged and contains a quote, then preserve all quotes from it.
+        // Otherwise, if it's not flagged, keep the sentence as is.
+        okay_sentences.push(
+            shouldDelete && sentence.includes('"')
+                ? (sentence.match(/"/g) || []).join('')
+                : (shouldDelete ? "" : sentence)
+        );
+    }
+
+    let filtered_text = okay_sentences.join('');
+
+    // Remove precise_delete phrases from the filtered text.
+    for (const phrase of precise_delete) {
+        const regex = new RegExp(escapeRegex(phrase), 'gi');
+        filtered_text = filtered_text.replace(regex, '');
+    }
+
+    // Apply simple phrase replacements.
+    for (const [target, replacement] of replace) {
+        const regex = new RegExp(escapeRegex(target), 'gi');
+        filtered_text = filtered_text.replace(regex, replacement);
+    }
+
+    // Apply name replacements.
+    for (const [target, replacement] of name_replace) {
+        const regex = new RegExp(escapeRegex(target), 'gi');
+        filtered_text = filtered_text.replace(regex, replacement);
+    }
+
+    // Apply random replacements over multiple detectable phrases.
+    filtered_text = applyRandomReplacements(filtered_text);
+
+    // Check module: remove paired empty quotes (even if whitespace is between) that now contain nothing.
+    filtered_text = removeEmptyQuotes(filtered_text);
+
+    // Check module: if a paired set of " exists adjacent to a stray single ",
+    // remove the single " so that only properly paired quotes remain.
+    filtered_text = removeAdjacentSingleQuotes(filtered_text);
+
+    return filtered_text;
+}
+
+/**
+ * For each defined detectable phrase, replace all its occurrences in the text
+ * with one randomly chosen option from its replacement options.
+ *
+ * This function is configured with four replacement groups (each with four options found).
+ *
+ * @param {string} text - The text to process.
+ * @return {string} - The text after applying random replacements.
+ */
+function applyRandomReplacements(text) {
+    const randomReplacementGroups = [
+        {
+            phrase: "Elara",
+            options: [
+                "Avielle",
+                "Annie",
+                "Avacyn",
+                "Adelyn",
+                "Vaila",
+                "Zevria",
+                "Novelle",
+                "Evelyn",
+                "Cassia",
+                "Mirelle",
+                "Juliana",
+                "Layla",
+                "Evie",
+                "Lexie",
+                "Diane",
+                "Elsa",
+                "Jayla",
+                "Lauryn",
+                "Ivy",
+                "Mirae",
+                "Roselyn",
+                "Selya",
+                "Ruvira",
+                "Sofia",
+                "Selmira"
+            ]
+        },
+        {
+            phrase: "Sarah",
+            options: [
+                "Amelia",
+                "Evelyn",
+                "Ashley",
+                "Violet",
+                "Elsie",
+                "Lucy",
+                "Jane",
+                "Rebecca",
+                "Madison",
+                "Rachel",
+                "Vanessa",
+                "Mia",
+                "Elsie",
+                "Chloe",
+                "Alice",
+                "Emily",
+                "Emma"
+            ]
+        },
+        {
+            phrase: "Mr. Thompson",
+            options: [
+                "Mr. Aldridge",
+                "Mr. Barrington",
+                "Mr. Kessler",
+                "Mr. Coldwell",
+                "Mr. Davenport",
+                "Mr. Ellsworth",
+                "Mr. Fairchild",
+                "Mr. Hargrove",
+                "Mr. Quillson",
+                "Mr. Ainsworth",
+                "Mr. Kensington",
+                "Mr. Lancaster",
+                "Mr. Montague",
+                "Mr. Norwood",
+                "Mr. Pennington",
+                "Mr. Radcliffe",
+                "Mr. Somerville",
+                "Mr. Wentworth"
+            ]
+        },
+        {
+            phrase: "Mrs. Thompson",
+            options: [
+                "Mrs. Ashbourne",
+                "Mrs. Blythe",
+                "Mrs. Carrington",
+                "Mrs. Dovewell",
+                "Mrs. Everhart",
+                "Mrs. Fenwick",
+                "Mrs. Islington",
+                "Mrs. Lockridge",
+                "Mrs. Jasmere",
+                "Mrs. Sterling",
+                "Mrs. Claremont",
+                "Mrs. Iverson",
+                "Mrs. Quillan",
+                "Mrs. Rosendale",
+                "Mrs. Valmere"
+            ]
+        },
+        {
+            phrase: "Ms. Thompson",
+            options: [
+                "Ms. Durnell",
+                "Ms. Blythe",
+                "Ms. Everston",
+                "Ms. Dovewell",
+                "Ms. Everhart",
+                "Ms. Fenwick",
+                "Ms. Morrow",
+                "Ms. Lockridge",
+                "Ms. Jasmere",
+                "Ms. Sterling",
+                "Ms. Claremont",
+                "Ms. Nightford",
+                "Ms. Quillan",
+                "Ms. Rosendale",
+                "Ms. Valmere"
+            ]
+        }
+    ];
+
+    randomReplacementGroups.forEach(group => {
+        const regex = new RegExp(escapeRegex(group.phrase), 'g');
+        text = text.replace(regex, () => {
+            const randomIndex = Math.floor(Math.random() * group.options.length);
+            return group.options[randomIndex];
+        });
+    });
+
+    return text;
+}
+
+function removeEmptyQuotes(text) {
+    // Matches a pair of quotes with only whitespace in between and removes them.
+    return text.replace(/"\s*"/g, "");
+}
+
+function removeAdjacentSingleQuotes(text) {
+    // Replace runs of consecutive quotes: if a group has an odd number
+    // (i.e. a proper pair with an extra stray quote), reduce it by one so that only even (paired) quotes remain.
+    return text.replace(/"+/g, (match) => {
+        if (match.length > 1 && match.length % 2 === 1) {
+            return '"'.repeat(match.length - 1);
+        }
+        return match;
+    });
+}
+
+/**
+ * Removes repeated phrases from the AI output based on context.
+ *
+ * @param {string} ai_output - The AI-generated text.
+ * @param {string} context - The surrounding context.
+ * @param {number} minWordLength - Minimum length of a word sequence.
+ * @param {number} minOccurrences - Minimum number of occurrences in context.
+ * @returns {string} - The filtered AI output.
+ */
+function removeRepeatedPhrases(ai_output, context, minWordLength = 6, minOccurrences = 2) {
+    let debug = false; // Ensure `debug` is properly declared
+
+    // --- Normalization ---
+    const cleanText = (text) => (text ? text.trim().replace(/\s+/g, ' ') : '');
+    ai_output = cleanText(ai_output);
+    context = cleanText(context);
+
+    const normalizeWord = (word) => word.replace(/^[.,!?;:]+|[.,!?;:]+$/g, '');
+    const originalOutputWords = ai_output.split(' ');
+    const normalizedOutputWords = originalOutputWords.map(normalizeWord);
+    const normalizedContextWords = context.split(' ').map(normalizeWord);
+
+    if (!ai_output || !context || originalOutputWords.length < minWordLength) {
+        return cleanText(ai_output);
+    }
+
+    // --- 1. Find Phrases to Remove ---
+    const phrasesToRemove = [];
+    const foundPhrases = new Set();
+
+    for (let i = 0; i <= normalizedOutputWords.length - minWordLength; i++) {
+        for (let length = normalizedOutputWords.length - i; length >= minWordLength; length--) {
+            if (phrasesToRemove.some(p => p.start <= i && (i + length) <= p.end)) continue;
+
+            const phraseWords = normalizedOutputWords.slice(i, i + length);
+            const phraseText = phraseWords.join(' ');
+
+            if (foundPhrases.has(phraseText)) continue;
+
+            let count = 0;
+            const normalizedContextString = normalizedContextWords.join(' ');
+            let startIndex = normalizedContextString.indexOf(phraseText);
+
+            while (startIndex !== -1) {
+                const isStartBoundary = (startIndex === 0) || (normalizedContextString[startIndex - 1] === ' ');
+                const endBoundaryIndex = startIndex + phraseText.length;
+                const isEndBoundary = (endBoundaryIndex === normalizedContextString.length) || (normalizedContextString[endBoundaryIndex] === ' ');
+
+                if (isStartBoundary && isEndBoundary) {
+                    count++;
+                    if (count >= minOccurrences) break;
+                }
+                startIndex = normalizedContextString.indexOf(phraseText, startIndex + 1);
+            }
+
+            if (count >= minOccurrences) {
+                phrasesToRemove.push({ start: i, end: i + length, text: originalOutputWords.slice(i, i + length).join(' ') });
+                foundPhrases.add(phraseText);
+                break;
+            }
+        }
+    }
+
+    if (phrasesToRemove.length === 0) {
+        return ai_output;
+    }
+
+    // Merge overlapping phrases
+    phrasesToRemove.sort((a, b) => a.start - b.start);
+    const mergedPhrases = [];
+    let currentMerge = { ...phrasesToRemove[0] };
+
+    for (let i = 1; i < phrasesToRemove.length; i++) {
+        const nextPhrase = phrasesToRemove[i];
+
+        if (nextPhrase.start <= currentMerge.end) {
+            currentMerge.end = nextPhrase.end;
+        } else {
+            mergedPhrases.push(currentMerge);
+            currentMerge = { ...nextPhrase };
+        }
+    }
+    mergedPhrases.push(currentMerge);
+
+    let resultWords = [...originalOutputWords];
+    mergedPhrases.sort((a, b) => b.start - a.start);
+    for (const phrase of mergedPhrases) {
+        resultWords.splice(phrase.start, phrase.end - phrase.start);
+    }
+
+    return resultWords.join(' ').trim();
+}
+
+/**
+ * Enforces paragraph breaks by normalizing newlines and excessive spaces.
+ *
+ * @param {string} text - The text to process.
+ * @returns {string} - The text with enforced paragraph breaks.
+ */
+function enforceParagraphBreak(text) {
+    if (!text || typeof text !== 'string') return '';
+
+    // Normalize newlines and remove excessive space
+    text = text.replace(/\s*\n\s*/g, '\n');
+    text = text.replace(/\n{2,}/g, '\n\n');
+    text = text.replace(/\s{2,}/g, ' ');
+    text = text.trim();
+
+    // Only add a newline if there's actual content
+    return text ? text + "\n" : "";
+}
+
+/**
+ * Separates dialogue by ensuring that quoted sections stand on their own lines.
+ *
+ * @param {string} text - The text to process.
+ * @returns {string} - The text with separated dialogue.
+ */
+function separateDialogue(text) {
+    return text.replace(/"([^"]+)"/g, '\n"$1"\n');
+}
+
+/**
+ * Formats the text for output.
+ * It enforces paragraph breaks, separates dialogue, deletes cliché sentences,
+ * and then applies anti-repetitiveness filtering.
+ *
+ * @param {string} text - The text to format.
+ * @param {string} context - Context used for filtering repeated phrases.
+ * @returns {object} - An object containing the formatted text.
+ */
+function formatText(text, context) {
+    if (!text || typeof text !== 'string') return { text: '' };
+
+    // Step 1: Enforce paragraph breaks
+    text = enforceParagraphBreak(text);
+
+    // Step 2: Separate dialogue for better readability
+    text = separateDialogue(text);
+
+    // Step 3: Delete cliché sentences (only those starting with a capital letter and ending with a period)
+    text = delete_cliches(text);
+
+    // Step 4: Apply anti-repetitiveness filtering
+    text = removeRepeatedPhrases(text, context, 10, 1);
+
+    return { text: text.trim() + "\n\n" };
+}
