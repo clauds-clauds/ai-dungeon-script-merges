@@ -1,8 +1,13 @@
-// Your "Input" tab should look like this
 const modifier = (text) => {
-    // Your other input modifier scripts go here (preferred)
     text = AutoCards("input", text);
-    // Your other input modifier scripts go here (alternative)
-    return { text };
-};
-modifier(text);
+    const newText = text.replace(/\bQw\b(?:\s+([^\n]+))?/g, (match, p1) => {
+        if (p1) {
+            return `[Describe in detail: ${p1.trim()}]\n`;
+        }
+        return `[Describe in detail:]`;
+    });
+    return { text: newText };
+}
+
+// Don't modify this part
+modifier(text)
